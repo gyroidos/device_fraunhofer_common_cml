@@ -85,6 +85,8 @@ typedef struct c_smartcard {
 	// the path to the usbtoken APDU relay socket inside the container
 	char *token_relay_path;
 
+	char *pkcs11_module;
+
 	// indicates whether the scd has succesfully initialized the token structure
 	bool is_init;
 	// indicates whether the token has already been provisioned with a platform-bound authentication code
@@ -105,6 +107,8 @@ c_smartcard_tokentype_to_proto(container_token_type_t tokentype)
 		return TOKEN_TYPE__SOFT;
 	case CONTAINER_TOKEN_TYPE_USB:
 		return TOKEN_TYPE__USB;
+	case CONTAINER_TOKEN_TYPE_PKCS11:
+		return TOKEN_TYPE__PKCS11;
 	default:
 		FATAL("Invalid container_token_type_t value : %d", tokentype);
 	}
@@ -794,6 +798,10 @@ c_smartcard_scd_token_add_block(c_smartcard_t *smartcard)
 		out.usbtoken_serial = smartcard->token_serial;
 	}
 
+	if (out.token_type == TOKEN_TYPE__PKCS11) {
+		out.pkcs11_module = smartcard->pkcs11_module;
+	}
+
 	TokenToDaemon *msg = c_smartcard_send_recv_block(&out);
 	if (!msg) {
 		ERROR("Failed to receive message although EVENT_IO_READ was set. Aborting smartcard_scd_token_block_new.");
@@ -1075,13 +1083,22 @@ c_smartcard_new(compartment_t *compartment)
 		}
 	}
 
+	if (smartcard->token_type == CONTAINER_TOKEN_TYPE_PKCS11) {
+		if (NULL == container_get_pkcs11_module(smartcard->container)) {
+			ERROR("PKCS#11 module missing in container config. Abort creation of container");
+			mem_free0(smartcard);
+		}
+		smartcard->pkcs11_module =
+			mem_strdup(container_get_pkcs11_module(smartcard->container));
+	}
+
 	smartcard->success_cb = NULL;
 	smartcard->err_cb = NULL;
 	smartcard->err_cbdata = NULL;
 
 	smartcard->sock = sock_unix_create_and_connect(SOCK_SEQPACKET, scd_sock_path);
 	if (smartcard->sock < 0) {
-		mem_free0(smartcard);
+		mem_free0(smartcard); //? potential mem_leak for usbtoken
 		ERROR("Failed to connect to scd");
 		return NULL;
 	}
@@ -1116,11 +1133,15 @@ c_smartcard_free(void *smartcardp)
 	/* release scd connection */
 	close(smartcard->sock);
 
-	if (smartcard->token_serial)
+	if (smartcard->token_serial) {
 		mem_free0(smartcard->token_serial);
-
-	if (smartcard->token_relay_path)
+	}
+	if (smartcard->token_relay_path) {
 		mem_free0(smartcard->token_relay_path);
+	}
+	if (smartcard->pkcs11_module) {
+		mem_free0(smartcard->pkcs11_module);
+	}
 
 	mem_free0(smartcard);
 }

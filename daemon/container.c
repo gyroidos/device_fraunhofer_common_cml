@@ -63,6 +63,7 @@ struct container {
 	container_token_type_t token_type;
 
 	bool usb_pin_entry;
+	char *pkcs11_module;
 
 	// virtual network interfaces from container config
 	list_t *vnet_cfg_list;
@@ -106,7 +107,8 @@ container_new(const uuid_t *uuid, const char *name, container_type_t type, bool 
 	      list_t *pnet_cfg_list, list_t *allowed_module_list, char **allowed_devices,
 	      char **assigned_devices, list_t *vnet_cfg_list, list_t *usbdev_list, const char *init,
 	      char **init_argv, char **init_env, size_t init_env_len, list_t *fifo_list,
-	      container_token_type_t ttype, bool usb_pin_entry, bool xorg_compat)
+	      container_token_type_t ttype, bool usb_pin_entry, bool xorg_compat,
+	      const char *pkcs11_module)
 {
 	container_t *container = mem_new0(container_t, 1);
 
@@ -161,6 +163,8 @@ container_new(const uuid_t *uuid, const char *name, container_type_t type, bool 
 	container->token_type = ttype;
 
 	container->usb_pin_entry = usb_pin_entry;
+
+	container->pkcs11_module = pkcs11_module ? mem_strdup(pkcs11_module) : NULL;
 
 	// set type specific flags for compartment
 	uint64_t flags = 0;
@@ -261,6 +265,10 @@ container_free(container_t *container)
 		mem_free0(l->data);
 	}
 	list_delete(container->fifo_list);
+
+	if (container->pkcs11_module) {
+		mem_free0(container->pkcs11_module);
+	}
 
 	mem_free0(container);
 }
@@ -915,6 +923,13 @@ container_get_usb_pin_entry(const container_t *container)
 {
 	ASSERT(container);
 	return container->usb_pin_entry;
+}
+
+const char *
+container_get_pkcs11_module(const container_t *container)
+{
+	ASSERT(container);
+	return container->pkcs11_module;
 }
 
 /* Functions usually implemented and registered by c_user module */
