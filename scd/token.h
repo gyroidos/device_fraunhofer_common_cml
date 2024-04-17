@@ -26,6 +26,7 @@
 
 #include "softtoken.h"
 #include "usbtoken.h"
+#include "p11token.h"
 
 #include "common/uuid.h"
 
@@ -53,7 +54,7 @@ typedef struct scd_token_data scd_token_data_t;
  * Choice of supported token types.
  * Must be kept in sync with scd.proto
  */
-typedef enum scd_tokentype { NONE, SOFT, USB } scd_tokentype_t;
+typedef enum scd_tokentype { NONE, SOFT, USB, PKCS11 } scd_tokentype_t;
 
 /**
  * Data used by the constructor scd_token_new
@@ -65,6 +66,7 @@ typedef struct token_constr_data {
 	union {
 		const char *softtoken_dir;
 		const char *usbtoken_serial;
+		const char *pkcs11_module;
 	} init_str;
 } token_constr_data_t;
 
