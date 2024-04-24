@@ -380,11 +380,14 @@ const char **
 container_get_dev_assign_list(const container_t *container);
 
 /**
- * Returns the the type of the container.
+ * Returns the type of the container.
  */
 container_type_t
 container_get_type(const container_t *container);
 
+/**
+ * Returns the PKCS#11-Module associated with the container 
+*/
 const char *
 container_get_pkcs11_module(const container_t *container);
 
