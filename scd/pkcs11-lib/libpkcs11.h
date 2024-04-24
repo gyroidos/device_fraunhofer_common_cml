@@ -20,8 +20,10 @@
 
 #ifndef __LIBPKCS11_H
 #define __LIBPKCS11_H
+#define CRYPTOKI_GNU 1
+#include "pkcs11.h"
 void *
-C_LoadModule(const char *name, CK_FUNCTION_LIST_PTR_PTR);
-CK_RV
+C_LoadModule(const char *name, struct ck_function_list **);
+ck_rv_t
 C_UnloadModule(void *module);
 #endif

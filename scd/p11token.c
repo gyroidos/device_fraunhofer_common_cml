@@ -31,13 +31,15 @@
 #include "common/str.h"
 #include "uuid.h"
 #include "pkcs11-lib/libpkcs11.h"
-#include "string.h"
+#include <string.h>
+#include <stdbool.h>
 
 #define P11TOKEN_MAX_WRONG_UNLOCK_ATTEMPTS 3
+#define P11_LABEL_MAX_LEN 32
 
 #define P11_CHECK_RV_RETURN(expr)                                                                  \
 	do {                                                                                       \
-		CK_RV rv = expr;                                                                   \
+		ck_rv_t rv = expr;                                                                 \
 		if (rv != CKR_OK) {                                                                \
 			ERROR("Pkcs11 operation '%s' returned Errorcode %lu\n", #expr, rv);        \
 			return -1;                                                                 \
@@ -46,7 +48,7 @@
 
 #define P11_CHECK_RV_GOTO(expr, label)                                                             \
 	do {                                                                                       \
-		CK_RV rv = expr;                                                                   \
+		ck_rv_t rv = expr;                                                                 \
 		if (rv != CKR_OK) {                                                                \
 			fprintf(stderr, "Pkcs11 operation '%s' returned Errorcode %lu\n", #expr,   \
 				rv);                                                               \
@@ -56,22 +58,22 @@
 
 struct p11token {
 	char *module_path;
-	CK_UTF8CHAR label[32];
+	unsigned char label[P11_LABEL_MAX_LEN];
 	unsigned int wrong_unlock_attempts;
-	CK_FUNCTION_LIST_PTR ctx;
-	CK_SESSION_HANDLE_PTR sh;
+	struct ck_function_list *ctx;
+	ck_session_handle_t *sh;
 	void *module;
 };
 
 // Helper Functions
-CK_SLOT_ID_PTR
-internal_find_free_slot(CK_FUNCTION_LIST_PTR ctx);
+ck_slot_id_t *
+int_get_free_slot_id_new(struct ck_function_list *ctx);
 
-CK_SLOT_ID_PTR
-internal_find_token(CK_FUNCTION_LIST_PTR ctx, const CK_UTF8CHAR *label);
+ck_slot_id_t *
+int_get_token_slot_id_new(struct ck_function_list *ctx, const unsigned char *label);
 
-CK_UTF8CHAR *
-internal_sanitize_label(const char *label);
+unsigned char *
+int_p11_token_label_new(const char *label);
 
 /**
  * create a new pkcs11 token
@@ -85,8 +87,10 @@ p11token_create_p11(const char *module_path, const char *so_pin, const char *use
 	ASSERT(user_pin);
 	ASSERT(label);
 
+	struct ck_function_list *ctx = NULL;
+	ck_slot_id_t *slot = NULL;
+	unsigned char *token_label = NULL;
 	// load pkcs11-module (load dll at runtime)
-	CK_FUNCTION_LIST_PTR ctx = NULL;
 	void *module = C_LoadModule(module_path, &ctx);
 	if (module == NULL) {
 		ERROR("Could not load pkcs11 module");
@@ -96,50 +100,54 @@ p11token_create_p11(const char *module_path, const char *so_pin, const char *use
 	P11_CHECK_RV_GOTO(ctx->C_Initialize(NULL), error_init);
 
 	// get free slot
-	CK_SLOT_ID_PTR slot = internal_find_free_slot(ctx);
-	IF_TRUE_GOTO_ERROR(slot == NULL_PTR, error);
-	//fprintf(stderr, "\nslot id: %lx\n", *slot);
+	slot = int_get_free_slot_id_new(ctx);
+	IF_TRUE_GOTO_ERROR(slot == NULL, error);
+
 	// sanitize label
-	CK_UTF8CHAR *token_label = internal_sanitize_label(label);
+	token_label = int_p11_token_label_new(label);
 
 	// initialize token on free slot
-	P11_CHECK_RV_GOTO(ctx->C_InitToken(*slot, (CK_CHAR_PTR)so_pin, strlen(so_pin),
-					   (CK_CHAR_PTR)token_label),
+	P11_CHECK_RV_GOTO(ctx->C_InitToken(*slot, (unsigned char *)so_pin, strlen(so_pin),
+					   (unsigned char *)token_label),
 			  error);
 
 	// connect to token
-	CK_SESSION_HANDLE sh;
-	P11_CHECK_RV_GOTO(ctx->C_OpenSession(*slot, CKF_RW_SESSION | CKF_SERIAL_SESSION, NULL_PTR,
-					     NULL_PTR, &sh),
+	ck_session_handle_t sh;
+	P11_CHECK_RV_GOTO(ctx->C_OpenSession(*slot, CKF_RW_SESSION | CKF_SERIAL_SESSION, NULL, NULL,
+					     &sh),
 			  error);
+
 	// login as SO
-	P11_CHECK_RV_GOTO(ctx->C_Login(sh, CKU_SO, (CK_CHAR_PTR)so_pin, strlen(so_pin)),
+	P11_CHECK_RV_GOTO(ctx->C_Login(sh, CKU_SO, (unsigned char *)so_pin, strlen(so_pin)),
 			  error_session);
+
 	// set user pin
-	P11_CHECK_RV_GOTO(ctx->C_InitPIN(sh, (CK_CHAR_PTR)user_pin, strlen(user_pin)),
+	P11_CHECK_RV_GOTO(ctx->C_InitPIN(sh, (unsigned char *)user_pin, strlen(user_pin)),
 			  error_session);
+
 	// logout SO
 	P11_CHECK_RV_GOTO(ctx->C_Logout(sh), error_session);
+
 	// login as user
-	P11_CHECK_RV_GOTO(ctx->C_Login(sh, CKU_USER, (CK_CHAR_PTR)user_pin, strlen(user_pin)),
+	P11_CHECK_RV_GOTO(ctx->C_Login(sh, CKU_USER, (unsigned char *)user_pin, strlen(user_pin)),
 			  error_session);
 
 	// create symmetric key
-	CK_OBJECT_HANDLE h_key;
-	CK_MECHANISM mechanism = { CKM_AES_KEY_GEN, NULL_PTR, 0 };
-	CK_KEY_TYPE aes_type = CKK_AES;
-	CK_ULONG length = 32; // size in bytes
-	//CK_BYTE id[] = { 123 };
-	CK_BBOOL y = CK_TRUE;
-	// CK_BBOOL no = CK_FALSE;
-
-	CK_ATTRIBUTE aesKeyTemplate[4] = {
+	ck_object_handle_t h_key;
+	struct ck_mechanism mechanism = { CKM_AES_KEY_GEN, NULL, 0 };
+	ck_key_type_t aes_type = CKK_AES;
+	unsigned long length = 32; // size in bytes -> 256bit key
+	bool y = true;
+	bool n = false;
+	struct ck_attribute aes_key_template[] = {
 		{ CKA_KEY_TYPE, &aes_type, sizeof(aes_type) },
-		{ CKA_TOKEN, &y, sizeof(y) },
-		{ CKA_LABEL, &label, sizeof(label) - 1 },
+		{ CKA_TOKEN, &y, sizeof(y) },	    // persistently store key on token
+		{ CKA_EXTRACTABLE, &n, sizeof(n) }, // key should not be extractable
+		{ CKA_LABEL, &label, strlen(label) },
 		{ CKA_VALUE_LEN, &length, sizeof(length) },
 	};
-	P11_CHECK_RV_GOTO(ctx->C_GenerateKey(sh, &mechanism, aesKeyTemplate, 4, &h_key),
+	P11_CHECK_RV_GOTO(ctx->C_GenerateKey(sh, &mechanism, aes_key_template,
+					     ELEMENTSOF(aes_key_template), &h_key),
 			  error_session);
 
 	// logout user
@@ -149,75 +157,88 @@ p11token_create_p11(const char *module_path, const char *so_pin, const char *use
 	P11_CHECK_RV_GOTO(ctx->C_CloseSession(sh), error);
 
 	// free slot id ptr
-	free(slot);
+	mem_free(slot);
 
 	// Unload Module
-	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL_PTR), error_init);
+	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL), error_init);
 	C_UnloadModule(module);
 
 	// return new token data
 	p11token_t *token = (p11token_t *)mem_new0(p11token_t, 1);
 	token->module_path = mem_strdup(module_path);
-	memcpy(token->label, token_label, 32);
+	memcpy(token->label, token_label, P11_LABEL_MAX_LEN);
 	// free label
 	mem_free0(token_label);
 	token->wrong_unlock_attempts = 0;
-	token->ctx = NULL_PTR;
-	token->sh = NULL_PTR;
+	token->ctx = NULL;
+	token->sh = NULL;
 	token->module = NULL;
 	return token;
 error_session:
 	P11_CHECK_RV_GOTO(ctx->C_CloseSession(sh), error);
 error:
-	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL_PTR), error_init);
+	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL), error_init);
 error_init:
+	if (slot) {
+		mem_free(slot);
+	}
+	if (token_label) {
+		mem_free(token_label);
+	}
 	C_UnloadModule(module);
 	return NULL;
 }
 
-/**
- * find token object by label
-*/
 p11token_t *
 p11token_token_by_label(const char *module_path, const char *label)
 {
 	ASSERT(module_path);
 	ASSERT(label);
 
-	CK_FUNCTION_LIST_PTR ctx = NULL;
+	struct ck_function_list *ctx = NULL;
+	unsigned char *token_label = NULL;
+	ck_slot_id_t *slot = NULL;
+	// load module
 	void *module = C_LoadModule(module_path, &ctx);
 	if (module == NULL) {
 		ERROR("Could not load pkcs11 module");
 	}
 
+	// init library
 	P11_CHECK_RV_GOTO(ctx->C_Initialize(NULL), error_init);
 
-	// search for token
-	CK_UTF8CHAR *token_label = internal_sanitize_label(label);
-
-	CK_SLOT_ID_PTR slot = internal_find_token(ctx, token_label);
+	// check if token exists
+	token_label = int_p11_token_label_new(label);
+	slot = int_get_token_slot_id_new(ctx, token_label);
 	if (slot == NULL) {
 		INFO("token for %s not found", label);
 		goto error; // cleanup and return null
 	}
 
-	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL_PTR), error_init);
+	// cleanup
+	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL), error_init);
 	C_UnloadModule(module);
 
-	// return new token
+	// if token exists create new token-object
 	p11token_t *token = (p11token_t *)mem_new0(p11token_t, 1);
 	token->module_path = mem_strdup(module_path);
-	memcpy(token->label, token_label, 32);
+	memcpy(token->label, token_label, P11_LABEL_MAX_LEN);
 	// free label
 	mem_free0(token_label);
 	token->wrong_unlock_attempts = 0;
-	token->ctx = NULL_PTR;
-	token->sh = NULL_PTR;
+	token->ctx = NULL;
+	token->sh = NULL;
 	token->module = NULL;
 	return token;
 error:
-	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL_PTR), error_init);
+	P11_CHECK_RV_GOTO(ctx->C_Finalize(NULL), error_init);
 error_init:
+	if (token_label) {
+		mem_free(token_label);
+	}
+	if (slot) {
+		mem_free(slot);
+	}
 	C_UnloadModule(module);
 	return NULL;
 }
@@ -229,14 +250,15 @@ int
 p11token_free(p11token_t *token)
 {
 	ASSERT(token);
+	ASSERT(token->module_path);
 
 	if (!p11token_is_locked(token)) {
 		ERROR("token is not locked");
 		return -1;
 	}
 
-	free(token->module_path);
-	free(token);
+	mem_free(token->module_path);
+	mem_free(token);
 	return 0;
 }
 
@@ -245,6 +267,8 @@ p11token_unlock(p11token_t *token, const char *user_pin)
 {
 	ASSERT(token);
 	ASSERT(user_pin);
+
+	ck_slot_id_t *slot_id = NULL;
 
 	if (p11token_is_locked_till_reboot(token)) {
 		WARN("PKCS11 token: too many failed unlock attempts");
@@ -264,19 +288,20 @@ p11token_unlock(p11token_t *token, const char *user_pin)
 	P11_CHECK_RV_GOTO(token->ctx->C_Initialize(NULL), error_init);
 
 	// search token
-	CK_SLOT_ID_PTR slot_id = internal_find_token(token->ctx, token->label);
-	IF_TRUE_GOTO_ERROR(slot_id == NULL_PTR, error);
+	slot_id = int_get_token_slot_id_new(token->ctx, token->label);
+	IF_TRUE_GOTO_ERROR(slot_id == NULL, error);
 	// create session handle
-	token->sh = (CK_SESSION_HANDLE_PTR)mem_alloc0(sizeof(CK_SESSION_HANDLE));
+	token->sh = (ck_session_handle_t *)mem_alloc0(sizeof(ck_session_handle_t));
 
 	// connect to token
 	P11_CHECK_RV_GOTO(token->ctx->C_OpenSession(*slot_id, CKF_RW_SESSION | CKF_SERIAL_SESSION,
-						    NULL_PTR, NULL_PTR, token->sh),
+						    NULL, NULL, token->sh),
 			  error);
-	free(slot_id);
+	mem_free(slot_id);
+	slot_id = NULL;
 
 	// login
-	switch (token->ctx->C_Login(*token->sh, CKU_USER, (CK_CHAR_PTR)user_pin,
+	switch (token->ctx->C_Login(*token->sh, CKU_USER, (unsigned char *)user_pin,
 				    strlen(user_pin))) {
 	case CKR_OK:
 		token->wrong_unlock_attempts = 0;
@@ -288,11 +313,18 @@ p11token_unlock(p11token_t *token, const char *user_pin)
 	}
 error_session:
 	P11_CHECK_RV_GOTO(token->ctx->C_CloseSession(*token->sh), error);
-	token->sh = NULL_PTR;
 error:
-	P11_CHECK_RV_GOTO(token->ctx->C_Finalize(NULL_PTR), error_init);
-	token->ctx = NULL_PTR;
+	if (token->sh) {
+		mem_free(token->sh);
+		token->sh = NULL;
+	}
+	if (slot_id) {
+		mem_free(slot_id);
+	}
+	P11_CHECK_RV_GOTO(token->ctx->C_Finalize(NULL), error_init);
+	token->ctx = NULL;
 error_init:
+
 	C_UnloadModule(token->module);
 	return -1;
 }
@@ -306,10 +338,10 @@ p11token_lock(p11token_t *token)
 
 	P11_CHECK_RV_RETURN(token->ctx->C_CloseSession(*token->sh));
 	free(token->sh);
-	token->sh = NULL_PTR;
+	token->sh = NULL;
 
-	P11_CHECK_RV_RETURN(token->ctx->C_Finalize(NULL_PTR));
-	token->ctx = NULL_PTR;
+	P11_CHECK_RV_RETURN(token->ctx->C_Finalize(NULL));
+	token->ctx = NULL;
 
 	C_UnloadModule(token->module);
 
@@ -321,7 +353,7 @@ p11token_is_locked(p11token_t *token)
 {
 	ASSERT(token);
 
-	return (token->ctx == NULL_PTR && token->sh == NULL_PTR);
+	return (token->ctx == NULL && token->sh == NULL);
 }
 
 bool
@@ -339,50 +371,63 @@ p11token_wrap_key(p11token_t *token, unsigned char *plain_key, size_t plain_key_
 	ASSERT(token);
 	ASSERT(plain_key);
 	ASSERT(wrapped_key);
+	ASSERT(wrapped_key_len);
+
+	unsigned char *ptr = NULL;
 
 	if (p11token_is_locked(token)) {
 		ERROR("p11token_wrap_key: token is locked");
-		fprintf(stderr, "\ntoken is locked\n");
 		goto error;
 	}
 
-	// CK_BBOOL y = CK_TRUE;
-
 	// get wrapping key handle
-	CK_KEY_TYPE aes_key_type = CKK_AES;
-	CK_ATTRIBUTE aesKeyTemplate[1] = {
+	// currently there is only one, therefore we can keep the search template simple
+	ck_key_type_t aes_key_type = CKK_AES;
+	struct ck_attribute search_template[] = {
 		{ CKA_KEY_TYPE, &aes_key_type, sizeof(aes_key_type) },
-		// todo { CKA_LABEL, &label, sizeof(label) - 1 },
 	};
-	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsInit(*token->sh, aesKeyTemplate, 1), error);
-	CK_OBJECT_HANDLE h_key;
-	CK_ULONG num_objects_found;
+	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsInit(*token->sh, search_template,
+							ELEMENTSOF(search_template)),
+			  error);
+	ck_object_handle_t h_key;
+	unsigned long num_objects_found;
 	P11_CHECK_RV_GOTO(token->ctx->C_FindObjects(*token->sh, &h_key, 1, &num_objects_found),
 			  error);
 	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsFinal(*token->sh), error);
 	if (0 == num_objects_found) {
-		fprintf(stderr, "\nwrapping key not found\n");
+		ERROR("\nwrapping key not found\n");
 		goto error;
 	}
 
 	// wrap key
-	CK_MECHANISM wrap_mechanism = {
-		CKM_AES_ECB,
-		NULL,
-		0,
+	/**
+	 * static default IV as defined in RFC 3394
+	 * TODO: investigate whether a random IV which is passed along with the
+	 * 			wrapped key is possible and desirable
+	 */
+	unsigned char iv[] = { 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6,
+			       0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6 };
+	struct ck_mechanism wrap_mechanism = {
+		CKM_AES_CBC_PAD,
+		iv,
+		ELEMENTSOF(iv),
 	};
 	P11_CHECK_RV_GOTO(token->ctx->C_EncryptInit(*token->sh, &wrap_mechanism, h_key), error);
 	// retrieve buffer size
-	P11_CHECK_RV_GOTO(token->ctx->C_Encrypt(*token->sh, plain_key, plain_key_len, NULL_PTR,
+	P11_CHECK_RV_GOTO(token->ctx->C_Encrypt(*token->sh, plain_key, plain_key_len, NULL,
 						wrapped_key_len),
 			  error);
-	*wrapped_key = mem_alloc0(*wrapped_key_len);
-	P11_CHECK_RV_GOTO(token->ctx->C_Encrypt(*token->sh, plain_key, plain_key_len, *wrapped_key,
+	ptr = (unsigned char *)mem_alloc0(*wrapped_key_len);
+	IF_TRUE_GOTO_DEBUG(NULL == ptr, error);
+	P11_CHECK_RV_GOTO(token->ctx->C_Encrypt(*token->sh, plain_key, plain_key_len, ptr,
 						wrapped_key_len),
 			  error);
-	ASSERT(*wrapped_key);
+	*wrapped_key = ptr;
 	return 0;
 error:
+	if (ptr) {
+		mem_free0(ptr);
+	}
 	return -1;
 }
 
@@ -393,22 +438,26 @@ p11token_unwrap_key(p11token_t *token, unsigned char *wrapped_key, size_t wrappe
 	ASSERT(token);
 	ASSERT(wrapped_key);
 	ASSERT(plain_key);
+	ASSERT(plain_key_len);
+
+	unsigned char *ptr = NULL;
 
 	if (p11token_is_locked(token)) {
 		ERROR("p11token_wrap_key: token is locked");
 		goto error;
 	}
 
-	CK_BBOOL y = CK_TRUE;
 	// get wrapping key handle
-	CK_KEY_TYPE aes_key_type = CKK_AES;
-	CK_ATTRIBUTE aesKeyTemplate[6] = {
-		{ CKA_KEY_TYPE, &aes_key_type, sizeof(aes_key_type) }, { CKA_WRAP, &y, sizeof(y) },
-		// todo { CKA_LABEL, &label, sizeof(label) - 1 },
+	// currently there is only one, therefore we can keep the template simple
+	ck_key_type_t aes_key_type = CKK_AES;
+	struct ck_attribute search_template[] = {
+		{ CKA_KEY_TYPE, &aes_key_type, sizeof(aes_key_type) },
 	};
-	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsInit(*token->sh, aesKeyTemplate, 1), error);
-	CK_OBJECT_HANDLE h_key;
-	CK_ULONG num_objects_found;
+	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsInit(*token->sh, search_template,
+							ELEMENTSOF(search_template)),
+			  error);
+	ck_object_handle_t h_key;
+	unsigned long num_objects_found;
 	P11_CHECK_RV_GOTO(token->ctx->C_FindObjects(*token->sh, &h_key, 1, &num_objects_found),
 			  error);
 	P11_CHECK_RV_GOTO(token->ctx->C_FindObjectsFinal(*token->sh), error);
@@ -416,21 +465,34 @@ p11token_unwrap_key(p11token_t *token, unsigned char *wrapped_key, size_t wrappe
 		goto error;
 	}
 	// unwrap key
-	CK_MECHANISM wrap_mechanism = {
-		CKM_AES_ECB,
-		NULL,
-		0,
+	/**
+	 * static default IV as defined in RFC 3394
+	 * TODO: investigate whether a random IV which is passed along with the
+	 * 			wrapped key is possible and desirable
+	 */
+	unsigned char iv[] = { 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6,
+			       0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6, 0xA6 };
+	struct ck_mechanism wrap_mechanism = {
+		CKM_AES_CBC_PAD,
+		iv,
+		ELEMENTSOF(iv),
 	};
 	P11_CHECK_RV_GOTO(token->ctx->C_DecryptInit(*token->sh, &wrap_mechanism, h_key), error);
-	P11_CHECK_RV_GOTO(token->ctx->C_Decrypt(*token->sh, wrapped_key, wrapped_key_len, NULL_PTR,
+	P11_CHECK_RV_GOTO(token->ctx->C_Decrypt(*token->sh, wrapped_key, wrapped_key_len, NULL,
 						plain_key_len),
 			  error);
-	*plain_key = (unsigned char *)mem_alloc0(*plain_key_len * sizeof(unsigned char));
-	P11_CHECK_RV_GOTO(token->ctx->C_Decrypt(*token->sh, wrapped_key, wrapped_key_len,
-						*plain_key, plain_key_len),
+	ptr = (unsigned char *)mem_alloc0(*plain_key_len);
+	IF_TRUE_GOTO_DEBUG(NULL == ptr, error);
+	P11_CHECK_RV_GOTO(token->ctx->C_Decrypt(*token->sh, wrapped_key, wrapped_key_len, ptr,
+						plain_key_len),
 			  error);
+	*plain_key = ptr;
+
 	return 0;
 error:
+	if (ptr) {
+		mem_free0(ptr);
+	}
 	return -1;
 }
 
@@ -460,24 +522,27 @@ error:
 /**
  * get next free slot id
 */
-CK_SLOT_ID_PTR
-internal_find_free_slot(CK_FUNCTION_LIST_PTR ctx)
+ck_slot_id_t *
+int_get_free_slot_id_new(struct ck_function_list *ctx)
 {
-	CK_ULONG slot_count = 0;
+	ASSERT(ctx);
 
-	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(CK_FALSE, NULL_PTR, &slot_count), error);
-	CK_SLOT_ID_PTR p_slots = (CK_SLOT_ID_PTR)mem_alloc0(slot_count * sizeof(CK_SLOT_ID));
-	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(CK_FALSE, p_slots, &slot_count), error);
+	unsigned long slot_count = 0;
+	ck_slot_id_t *p_slots = NULL;
 
-	for (CK_ULONG i = 0; i < slot_count; i++) {
-		CK_RV rv = CKR_OK;
-		CK_SLOT_INFO slot_info;
+	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(false, NULL, &slot_count), error);
+	p_slots = (ck_slot_id_t *)mem_alloc(slot_count * sizeof(ck_slot_id_t));
+	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(false, p_slots, &slot_count), error);
+
+	for (unsigned long i = 0; i < slot_count; i++) {
+		ck_rv_t rv = CKR_OK;
+		struct ck_slot_info slot_info;
 		if ((rv = ctx->C_GetSlotInfo(p_slots[i], &slot_info)) == CKR_OK) {
 			if ((i == p_slots[i])) {
-				CK_SLOT_ID_PTR free_slot = mem_alloc(sizeof(CK_SLOT_ID));
+				ck_slot_id_t *free_slot = mem_alloc(sizeof(ck_slot_id_t));
 				*free_slot = p_slots[i];
-				// free array
-				free(p_slots);
+
+				mem_free(p_slots);
 				return free_slot;
 			}
 		} else {
@@ -486,34 +551,39 @@ internal_find_free_slot(CK_FUNCTION_LIST_PTR ctx)
 	}
 
 error:
-	return NULL_PTR;
+	if (p_slots) {
+		mem_free(p_slots);
+	}
+	return NULL;
 }
 
 /**
  * find token by label
 */
-CK_SLOT_ID_PTR
-internal_find_token(CK_FUNCTION_LIST_PTR ctx, const CK_UTF8CHAR *label)
+ck_slot_id_t *
+int_get_token_slot_id_new(struct ck_function_list *ctx, const unsigned char *label)
 {
-	// get slot list
-	CK_ULONG slot_count = 0;
-	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(CK_TRUE, NULL_PTR, &slot_count), error);
-	CK_SLOT_ID_PTR p_slots = (CK_SLOT_ID_PTR)mem_alloc0(slot_count * sizeof(CK_SLOT_ID));
-	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(CK_FALSE, p_slots, &slot_count), error);
+	ASSERT(ctx);
+	ASSERT(label);
 
-	// debug helper
-	char *label_str = mem_alloc0(sizeof(char) * 33);
-	for (CK_ULONG i = 0; i < slot_count; i++) {
-		CK_RV rv = CKR_OK;
-		CK_TOKEN_INFO token_info;
+	// get slot list
+	ck_slot_id_t *p_slots = NULL;
+	unsigned long slot_count = 0;
+	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(true, NULL, &slot_count), error);
+	p_slots = (ck_slot_id_t *)mem_alloc(slot_count * sizeof(ck_slot_id_t));
+	P11_CHECK_RV_GOTO(ctx->C_GetSlotList(false, p_slots, &slot_count), error);
+
+	for (unsigned long i = 0; i < slot_count; i++) {
+		ck_rv_t rv = CKR_OK;
+		struct ck_token_info token_info;
 		if ((rv = ctx->C_GetTokenInfo(p_slots[i], &token_info)) == CKR_OK) {
-			memcpy(label_str, token_info.label, 32);
-			//fprintf(stderr, "Found token %s\n", label_str);
-			if (0 == strncmp((char *)token_info.label, (char *)label, 32)) {
-				CK_SLOT_ID_PTR slot_id =
-					(CK_SLOT_ID_PTR)mem_alloc(sizeof(CK_SLOT_ID));
+			if (0 ==
+			    strncmp((char *)token_info.label, (char *)label, P11_LABEL_MAX_LEN)) {
+				ck_slot_id_t *slot_id =
+					(ck_slot_id_t *)mem_alloc(sizeof(ck_slot_id_t));
 				*slot_id = p_slots[i];
-				free(label_str);
+
+				mem_free(p_slots);
 				return slot_id;
 			}
 		} else {
@@ -521,27 +591,32 @@ internal_find_token(CK_FUNCTION_LIST_PTR ctx, const CK_UTF8CHAR *label)
 		}
 	}
 error:
-	return NULL_PTR;
+	if (p_slots) {
+		mem_free(p_slots);
+	}
+	return NULL;
 }
 
 /**
  * Converts a string into a token label: must not be null-terminated according to spec
 */
-CK_UTF8CHAR *
-internal_sanitize_label(const char *label)
+unsigned char *
+int_p11_token_label_new(const char *label)
 {
+	ASSERT(label);
+
 	size_t len_label = strlen(label);
-	CK_UTF8CHAR *token_label = mem_alloc0(32); // must be 32 bytes according to spec
-	if (len_label <= 32) {
+	unsigned char *token_label = mem_alloc0(P11_LABEL_MAX_LEN);
+	if (len_label <= P11_LABEL_MAX_LEN) {
 		memcpy(token_label, label, len_label);
 
 		// pad remaining space
-		for (size_t i = len_label + 1; i < 32; i++) {
+		for (size_t i = len_label + 1; i < P11_LABEL_MAX_LEN; i++) {
 			token_label[i] = ' ';
 		}
 	} else {
 		// label is too long: truncate
-		memcpy(token_label, label, 32);
+		memcpy(token_label, label, P11_LABEL_MAX_LEN);
 	}
 
 	return token_label;

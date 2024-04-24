@@ -25,7 +25,6 @@
 #define P11TOKEN_H
 
 #include <stdbool.h>
-#include "pkcs11-lib/pkcs11.h"
 #include <stddef.h>
 
 // todo: move to c-file -> hide implementation details to user

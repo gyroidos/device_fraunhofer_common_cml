@@ -27,8 +27,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "pkcs11.h"
-
 #include "libscdl.h"
 #include "libpkcs11.h"
 #include "../common/macro.h"
@@ -46,11 +44,12 @@ typedef struct sc_pkcs11_module sc_pkcs11_module_t;
  * C_Initialize, and get the list of function pointers
  */
 void *
-C_LoadModule(const char *mspec, CK_FUNCTION_LIST_PTR_PTR funcs)
+C_LoadModule(const char *mspec, struct ck_function_list **funcs)
 {
 	sc_pkcs11_module_t *mod;
-	CK_RV rv, (*c_get_function_list)(CK_FUNCTION_LIST_PTR_PTR);
-	CK_RV (*c_get_interface)(CK_UTF8CHAR_PTR, CK_VERSION_PTR, CK_INTERFACE_PTR_PTR, CK_FLAGS);
+	ck_rv_t rv, (*c_get_function_list)(struct ck_function_list **);
+	ck_rv_t (*c_get_interface)(unsigned char *, struct ck_version *, struct ck_interface **,
+				   ck_flags_t);
 	mod = calloc(1, sizeof(*mod));
 	if (mod == NULL) {
 		return NULL;
@@ -68,18 +67,18 @@ C_LoadModule(const char *mspec, CK_FUNCTION_LIST_PTR_PTR funcs)
 	}
 
 	c_get_interface =
-		CAST(CK_RV(*)(CK_UTF8CHAR_PTR, CK_VERSION_PTR, CK_INTERFACE_PTR_PTR, CK_FLAGS))
-			sc_dlsym(mod->handle, "C_GetInterface");
+		CAST(ck_rv_t(*)(unsigned char *, struct ck_version *, struct ck_interface **,
+				ck_flags_t)) sc_dlsym(mod->handle, "C_GetInterface");
 	if (c_get_interface) {
-		CK_INTERFACE *interface = NULL;
+		struct ck_interface *interface = NULL;
 
 		/* Get default PKCS #11 interface */
-		rv = c_get_interface((CK_UTF8CHAR_PTR) "PKCS 11", NULL, &interface, 0);
+		rv = c_get_interface((unsigned char *)"PKCS 11", NULL, &interface, 0);
 		if (rv == CKR_OK) {
 			/* this is actually 3.0 function list, but it starts
 			 * with the same fields. Only for new functions, it
 			 * needs to be casted to new structure */
-			*funcs = interface->pFunctionList;
+			*funcs = interface->function_list_ptr;
 			return (void *)mod;
 		} else {
 			fprintf(stderr, "C_GetInterface failed %lx, retry 2.x way", rv);
@@ -87,8 +86,8 @@ C_LoadModule(const char *mspec, CK_FUNCTION_LIST_PTR_PTR funcs)
 	}
 
 	/* Get the list of function pointers */
-	c_get_function_list =
-		CAST(CK_RV(*)(CK_FUNCTION_LIST_PTR_PTR)) sc_dlsym(mod->handle, "C_GetFunctionList");
+	c_get_function_list = CAST(ck_rv_t(*)(struct ck_function_list **))
+		sc_dlsym(mod->handle, "C_GetFunctionList");
 	if (!c_get_function_list)
 		goto failed;
 	rv = c_get_function_list(funcs);
@@ -110,7 +109,7 @@ failed:
  * The calling application is responsible for cleaning up
  * and calling C_Finalize
  */
-CK_RV
+ck_rv_t
 C_UnloadModule(void *module)
 {
 	sc_pkcs11_module_t *mod = (sc_pkcs11_module_t *)module;

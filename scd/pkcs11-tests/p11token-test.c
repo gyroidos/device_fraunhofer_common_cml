@@ -3,6 +3,7 @@
 #include "../p11token.h"
 #include "../common/mem.h"
 #include "../common/file.h"
+#include "../common/macro.h"
 #include <stdio.h>
 
 #define MODULE_PATH "/usr/lib/softhsm/libsofthsm2.so"
@@ -11,7 +12,7 @@
 #define LABEL "munit_test_token"
 
 static void *
-setup_test_token(const MunitParameter params[], void *user_data)
+setup_test_token(UNUSED const MunitParameter params[], UNUSED void *user_data)
 {
 	p11token_t *token = p11token_create_p11(MODULE_PATH, SO_PIN, USER_PIN, LABEL);
 
@@ -28,7 +29,7 @@ free_test_token(void *fixture)
 }
 
 MunitResult
-test_p11token_create_p11(const MunitParameter params[], void *user_data_or_fixture)
+test_p11token_create_p11(UNUSED const MunitParameter params[], UNUSED void *user_data_or_fixture)
 {
 	p11token_t *token = p11token_create_p11(MODULE_PATH, SO_PIN, USER_PIN, LABEL);
 
@@ -40,7 +41,7 @@ test_p11token_create_p11(const MunitParameter params[], void *user_data_or_fixtu
 }
 
 MunitResult
-test_p11token_unlock_lock(const MunitParameter params[], void *test_token)
+test_p11token_unlock_lock(UNUSED const MunitParameter params[], void *test_token)
 {
 	p11token_t *token = (p11token_t *)test_token;
 	munit_assert_true(p11token_unlock(token, "1234") == 0);
@@ -50,7 +51,7 @@ test_p11token_unlock_lock(const MunitParameter params[], void *test_token)
 }
 
 MunitResult
-test_p11token_wrap_unwrap(const MunitParameter params[], void *test_token)
+test_p11token_wrap_unwrap(UNUSED const MunitParameter params[], void *test_token)
 {
 	p11token_t *token = (p11token_t *)test_token;
 
@@ -68,12 +69,13 @@ test_p11token_wrap_unwrap(const MunitParameter params[], void *test_token)
 	munit_assert_true(
 		p11token_wrap_key(token, test_key, 96, &wrapped_key, &wrapped_key_length) == 0);
 	//fprintf(stderr, "wrapped_key_length=%lu\n", wrapped_key_length);
+	munit_assert_not_null(wrapped_key);
 	// unwrap key
 	unsigned char *plain_key;
 	unsigned long plain_key_len;
 	munit_assert_true(p11token_unwrap_key(token, wrapped_key, wrapped_key_length, &plain_key,
 					      &plain_key_len) == 0);
-
+	munit_assert_not_null(plain_key);
 	// assert original with result
 	munit_assert_true(96 == plain_key_len);
 	munit_assert_memory_equal(96, test_key, plain_key);
@@ -87,7 +89,7 @@ test_p11token_wrap_unwrap(const MunitParameter params[], void *test_token)
 }
 
 MunitResult
-test_p11token_change_pin(const MunitParameter params[], void *test_token)
+test_p11token_change_pin(UNUSED const MunitParameter params[], void *test_token)
 {
 	p11token_t *token = (p11token_t *)test_token;
 	munit_assert_true(0 == p11token_change_pin(token, USER_PIN, "12345"));
