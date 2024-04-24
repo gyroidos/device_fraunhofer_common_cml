@@ -27,7 +27,6 @@
 #include <stdbool.h>
 #include <stddef.h>
 
-// todo: move to c-file -> hide implementation details to user
 typedef struct p11token p11token_t;
 
 /**
