@@ -516,20 +516,25 @@ scd_token_new(const DaemonToToken *msg)
 
 	create_data.type = scd_proto_to_tokentype(msg);
 
-	// ? why no switch statement here
-	if (create_data.type == NONE) {
+	switch (create_data.type) {
+	case NONE:
 		create_data.init_str.softtoken_dir = NULL;
-	} else if (create_data.type == SOFT) {
+		break;
+	case SOFT:
 		create_data.init_str.softtoken_dir = SCD_TOKEN_DIR;
-	} else if (create_data.type == USB) {
+		break;
+	case USB:
 		ASSERT(msg->usbtoken_serial);
 		create_data.init_str.usbtoken_serial = msg->usbtoken_serial;
-	} else if (create_data.type == PKCS11) {
+		break;
+	case PKCS11:
 		ASSERT(msg->pkcs11_module);
 		create_data.init_str.pkcs11_module = msg->pkcs11_module;
-	} else {
+		break;
+	default:
 		ERROR("Type of token not recognized");
 		return -1;
+		break;
 	}
 
 	create_data.uuid = msg->token_uuid;
