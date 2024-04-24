@@ -1078,15 +1078,14 @@ c_smartcard_new(compartment_t *compartment)
 		}
 		if (NULL == smartcard->token_serial) {
 			ERROR("Usbtoken reader serial missing in container config. Abort creation of container");
-			mem_free0(smartcard);
-			return NULL;
+			goto error;
 		}
 	}
 
 	if (smartcard->token_type == CONTAINER_TOKEN_TYPE_PKCS11) {
 		if (NULL == container_get_pkcs11_module(smartcard->container)) {
 			ERROR("PKCS#11 module missing in container config. Abort creation of container");
-			mem_free0(smartcard);
+			goto error;
 		}
 		smartcard->pkcs11_module =
 			mem_strdup(container_get_pkcs11_module(smartcard->container));
@@ -1098,9 +1097,8 @@ c_smartcard_new(compartment_t *compartment)
 
 	smartcard->sock = sock_unix_create_and_connect(SOCK_SEQPACKET, scd_sock_path);
 	if (smartcard->sock < 0) {
-		mem_free0(smartcard); //? potential mem_leak for usbtoken
 		ERROR("Failed to connect to scd");
-		return NULL;
+		goto error;
 	}
 
 	if (0 != c_smartcard_token_init(smartcard)) {
@@ -1115,6 +1113,15 @@ c_smartcard_new(compartment_t *compartment)
 	smartcard->token_relay_path = NULL;
 
 	return smartcard;
+error:
+	if (smartcard->token_serial) {
+		mem_free0(smartcard->token_serial);
+	}
+	if (smartcard->pkcs11_module) {
+		mem_free0(smartcard->pkcs11_module);
+	}
+	mem_free0(smartcard);
+	return NULL;
 }
 
 static void
