@@ -536,21 +536,9 @@ cryptfs_setup_volume_integrity_new(const char *label, const char *real_blkdev,
 		DEBUG("Formatting crypto blkdev %s. Generating initial MAC on "
 		      "integrity_dev %s",
 		      crypto_blkdev, integrity_dev);
-		int fd;
-		if ((fd = open(crypto_blkdev, O_WRONLY | O_DIRECT)) < 0) {
-			ERROR("Cannot open volume %s", crypto_blkdev);
-			goto error;
-		}
-		char zeros[DM_INTEGRITY_BUF_SIZE] __attribute__((__aligned__(512)));
-		for (unsigned long i = 0; i < fs_size / 8; ++i) {
-			if (write(fd, zeros, DM_INTEGRITY_BUF_SIZE) < DM_INTEGRITY_BUF_SIZE) {
-				ERROR_ERRNO("Could not write empty block %lu to %s", i,
-					    crypto_blkdev);
-				close(fd);
-				goto error;
-			}
-		}
-		close(fd);
+		IF_FALSE_GOTO_ERROR(!file_copy("/dev/zero", crypto_blkdev, fs_size / 8,
+					       DM_INTEGRITY_BUF_SIZE, 0),
+				    error);
 	}
 	return crypto_blkdev;
 error:
