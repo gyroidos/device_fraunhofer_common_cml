@@ -36,7 +36,6 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
-#include <sys/sendfile.h>
 #include <fcntl.h>
 #include <alloca.h>
 
@@ -128,6 +127,8 @@ int
 file_copy(const char *in_file, const char *out_file, ssize_t count, size_t bs, off_t seek)
 {
 	int in_fd, out_fd, ret = 0;
+	ssize_t i;
+	unsigned char *buf;
 
 	IF_NULL_RETVAL(in_file, -1);
 	IF_NULL_RETVAL(out_file, -1);
@@ -146,41 +147,42 @@ file_copy(const char *in_file, const char *out_file, ssize_t count, size_t bs, o
 		return -1;
 	}
 
+	buf = mem_alloc0(bs);
+
 	ret = lseek(out_fd, seek * bs, SEEK_SET);
 	if (ret < 0) {
 		DEBUG_ERRNO("Could not lseek in output file %s", out_file);
 		goto out;
 	}
 
-	ssize_t len = 0;
-	if (count < 0) {
-		struct stat stat;
-		if (fstat(in_fd, &stat) != 0) {
-			DEBUG_ERRNO("fstat on %s failed", in_file);
+	for (i = 0; i != count; i++) {
+		ssize_t len;
+
+		len = read(in_fd, buf, bs);
+
+		if (0 == (i % 1024))
+			TRACE("Copied %ld bytes from %s to %s", MUL_WITH_OVERFLOW_CHECK(bs, i),
+			      in_file, out_file);
+
+		if (len == 0) {
+			goto out;
+		} else if (len < 0) {
+			DEBUG_ERRNO("Could not read from input file %s", in_file);
 			ret = -1;
 			goto out;
+		} else /* if (len > 0) */ {
+			if (write(out_fd, buf, len) < 0) {
+				DEBUG_ERRNO("Could not write to output file %s", out_file);
+				ret = -1;
+				goto out;
+			}
 		}
-		len = stat.st_size;
-	} else {
-		len = MUL_WITH_OVERFLOW_CHECK(count, bs);
 	}
-
-	while (len > 0) {
-		ssize_t num_bytes = sendfile(out_fd, in_fd, NULL, len);
-		if (num_bytes < 0) {
-			DEBUG_ERRNO("copy_file_range failed");
-			ret = -1;
-			goto out;
-		}
-
-		len -= num_bytes;
-	}
-
-	ret = 0;
 
 out:
 	close(out_fd);
 	close(in_fd);
+	mem_free(buf);
 
 	return ret;
 }
