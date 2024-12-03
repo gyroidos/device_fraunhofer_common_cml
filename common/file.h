@@ -73,6 +73,17 @@ int
 file_copy(const char *in_file, const char *out_file, ssize_t count, size_t bs, off_t seek);
 
 /**
+ * Copy a regular file with zero copy.
+ * @param in_file The file to be read.
+ * @param out_file The file to be written.
+ * @param len
+ * @param seek Skip seek blocks at start of output.
+ * @return -1 on error else 0.
+ */
+int
+file_copy_zero(const char *in_file, const char *out_file, size_t len, off_t seek);
+
+/**
  * Move a file.
  * @param src The source file name.
  * @param dst The destination file name.
