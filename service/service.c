@@ -94,11 +94,11 @@ service_set_hostname(int fd)
 	line = mem_printf("127.0.1.1\t %s\n", name);
 	if (file_exists("/etc/hosts")) { // save and restore stock file
 		if (!file_exists("/etc/hosts.stock"))
-			rc = file_copy("/etc/hosts", "/etc/hosts.stock", file_size("/etc/hosts"),
-				       512, 0);
+			rc = file_copy_zero("/etc/hosts", "/etc/hosts.stock",
+					    file_size("/etc/hosts"), 0);
 		else
-			rc = file_copy("/etc/hosts.stock", "/etc/hosts",
-				       file_size("/etc/hosts.stock"), 512, 0);
+			rc = file_copy_zero("/etc/hosts.stock", "/etc/hosts",
+					    file_size("/etc/hosts.stock"), 0);
 	}
 	rc += file_write_append("/etc/hosts", line, strlen(line));
 

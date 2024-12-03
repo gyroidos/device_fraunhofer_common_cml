@@ -130,7 +130,7 @@ download_start(download_t *dl)
 		if (do_file_copy) {
 			char *local_dl_src = dl->url + 7;
 			INFO("Copying file from %s -> %s", local_dl_src, dl->file);
-			int ret = file_copy(local_dl_src, dl->file, -1, DL_COPY_BUF_SIZE, 0);
+			int ret = file_copy_zero(local_dl_src, dl->file, -1, 0);
 			if (ret < 0)
 				ERROR("Failed retrieving '%s'!", dl->url);
 			_exit(ret);
