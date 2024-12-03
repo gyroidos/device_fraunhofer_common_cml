@@ -7,7 +7,6 @@ SRC_FILES := \
 	../common/munit.c \
 	../p11token.c \
 	../pkcs11-lib/libpkcs11.c \
-	../pkcs11-lib/libscdl.c \
 	p11token-test.c
 
 all: p11test

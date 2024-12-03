@@ -27,7 +27,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "libscdl.h"
+#include <dlfcn.h>
+
 #include "libpkcs11.h"
 #include "../common/macro.h"
 
@@ -60,15 +61,15 @@ C_LoadModule(const char *mspec, struct ck_function_list **funcs)
 		free(mod);
 		return NULL;
 	}
-	mod->handle = sc_dlopen(mspec);
+	mod->handle = dlopen(mspec, RTLD_LAZY);
 	if (mod->handle == NULL) {
-		fprintf(stderr, "sc_dlopen failed: %s\n", sc_dlerror());
+		fprintf(stderr, "dlopen failed: %s\n", dlerror());
 		goto failed;
 	}
 
 	c_get_interface =
 		CAST(ck_rv_t(*)(unsigned char *, struct ck_version *, struct ck_interface **,
-				ck_flags_t)) sc_dlsym(mod->handle, "C_GetInterface");
+				ck_flags_t)) dlsym(mod->handle, "C_GetInterface");
 	if (c_get_interface) {
 		struct ck_interface *interface = NULL;
 
@@ -87,7 +88,7 @@ C_LoadModule(const char *mspec, struct ck_function_list **funcs)
 
 	/* Get the list of function pointers */
 	c_get_function_list = CAST(ck_rv_t(*)(struct ck_function_list **))
-		sc_dlsym(mod->handle, "C_GetFunctionList");
+		dlsym(mod->handle, "C_GetFunctionList");
 	if (!c_get_function_list)
 		goto failed;
 	rv = c_get_function_list(funcs);
@@ -117,7 +118,7 @@ C_UnloadModule(void *module)
 	if (!mod || mod->_magic != MAGIC)
 		return CKR_ARGUMENTS_BAD;
 
-	if (mod->handle != NULL && sc_dlclose(mod->handle) < 0)
+	if (mod->handle != NULL && dlclose(mod->handle) < 0)
 		return CKR_FUNCTION_FAILED;
 
 	free(mod);

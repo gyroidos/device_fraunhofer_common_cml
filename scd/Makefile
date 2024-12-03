@@ -86,8 +86,7 @@ ifeq ($(TRUSTME_PKCS11), y)
 	LOCAL_LDFLAGS += -ldl
     SRC_FILES += \
 	p11token.c \
-	pkcs11-lib/libpkcs11.c \
-	pkcs11-lib/libscdl.c
+	pkcs11-lib/libpkcs11.c
 endif
 
 
