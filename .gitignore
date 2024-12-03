@@ -35,3 +35,4 @@ tags
 /common/testdata/token_pss.p12
 /common/testdata/untrusted_chain_including_rootca.cer
 /common/testdata/untrusted_chain_including_rootca.cert
+/scd/pkcs11-tests/p11test

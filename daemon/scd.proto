@@ -41,6 +41,7 @@ enum TokenType {
 	NONE = 1;
 	SOFT = 2;
 	USB = 3;
+	PKCS11 = 4;
 }
 
 
@@ -90,6 +91,8 @@ message DaemonToToken {
 	optional bytes pairing_secret = 7; // to bind the token to the device
 
 	optional string usbtoken_serial = 8; // identify the usb token reader by its serial
+
+	optional string pkcs11_module = 9; // path to PKCS#11-module
 
 	optional bytes unwrapped_key = 10;	// for wrapping a key
 	optional bytes wrapped_key = 11;	// for (un)wrapping a key

@@ -53,6 +53,7 @@ struct scd_token_data {
 	union {
 		softtoken_t *softtoken;
 		usbtoken_t *usbtoken;
+		p11token_t *p11token;
 	} int_token;
 
 	scd_tokentype_t type;
@@ -484,6 +485,79 @@ int_get_atr_usb(scd_token_t *token, unsigned char *brsp, size_t brsp_len)
 }
 #endif // ENABLESCHSM
 
+#ifdef ENABLEPKCS11
+int
+int_lock_p11(scd_token_t *token)
+{
+	return p11token_lock(token->token_data->int_token.p11token);
+}
+
+int
+int_unlock_p11(scd_token_t *token, char *passwd, UNUSED unsigned char *pairing_secret,
+	       UNUSED size_t pairing_sec_len)
+{
+	return p11token_unlock(token->token_data->int_token.p11token, passwd);
+}
+
+bool
+int_is_locked_p11(scd_token_t *token)
+{
+	return p11token_is_locked(token->token_data->int_token.p11token);
+}
+
+bool
+int_is_locked_till_reboot_p11(scd_token_t *token)
+{
+	return p11token_is_locked_till_reboot(token->token_data->int_token.p11token);
+}
+
+int
+int_wrap_key_p11(scd_token_t *token, UNUSED char *label, unsigned char *plain_key,
+		 size_t plain_key_len, unsigned char **wrapped_key, int *wrapped_key_len)
+{
+	return p11token_wrap_key(token->token_data->int_token.p11token, plain_key, plain_key_len,
+				 wrapped_key, (unsigned long *)wrapped_key_len);
+}
+
+int
+int_unwrap_key_p11(scd_token_t *token, UNUSED char *label, unsigned char *wrapped_key,
+		   size_t wrapped_key_len, unsigned char **plain_key, int *plain_key_len)
+{
+	return p11token_unwrap_key(token->token_data->int_token.p11token, wrapped_key,
+				   wrapped_key_len, plain_key, (unsigned long *)plain_key_len);
+}
+
+int
+int_change_passphrase_p11(scd_token_t *token, const char *oldpass, const char *newpass,
+			  UNUSED unsigned char *pairing_secret, UNUSED size_t pairing_sec_len,
+			  UNUSED bool is_provisioning)
+{
+	return p11token_change_pin(token->token_data->int_token.p11token, oldpass, newpass);
+}
+
+int
+int_send_apdu_p11(UNUSED scd_token_t *token, UNUSED unsigned char *adpu, UNUSED size_t apdu_len,
+		  UNUSED unsigned char *brsp, UNUSED size_t brsp_len)
+{
+	ERROR("send_adpu() not meaningful to p11token. Aborting ...");
+	return -1;
+}
+
+int
+int_reset_auth_p11(UNUSED scd_token_t *token, UNUSED unsigned char *brsp, UNUSED size_t brsp_len)
+{
+	ERROR("reset_auth() not meaningful to p11token. Aborting ...");
+	return -1;
+}
+
+int
+int_get_atr_p11(UNUSED scd_token_t *token, UNUSED unsigned char *brsp, UNUSED size_t brsp_len)
+{
+	ERROR("get_atr() not meaningful to p11token. Aborting ...");
+	return -1;
+}
+#endif // ENABLEPKCS11
+
 scd_token_t *
 token_new(const token_constr_data_t *constr_data)
 {
@@ -585,6 +659,50 @@ token_new(const token_constr_data_t *constr_data)
 		break;
 	}
 #endif // ENABLESCHSM
+#ifdef ENABLEPKCS11
+	case (PKCS11): {
+		DEBUG("Create scd_token with internal type 'PKCS11'");
+
+		ASSERT(constr_data->uuid);
+		ASSERT(constr_data->init_str.pkcs11_module);
+		p11token_t *token;
+		token = p11token_token_by_label(constr_data->init_str.pkcs11_module,
+						constr_data->uuid);
+
+		// create new token if not found
+		if (token == NULL) {
+			// create random so_pin
+			unsigned char *random_mem =
+				(unsigned char *)file_read_new("/dev/urandom", 32);
+			ASSERT(random_mem);
+			str_t *so_pin = str_hexdump_new(random_mem, 32);
+			free(random_mem);
+			token = p11token_create_p11(constr_data->init_str.pkcs11_module,
+						    str_buffer(so_pin), STOKEN_DEFAULT_PASS,
+						    constr_data->uuid);
+			if (!token) {
+				ERROR("Creation of softtoken failed");
+				goto err;
+			}
+			str_free(so_pin, true);
+		}
+
+		new_token->token_data->int_token.p11token = token;
+
+		new_token->token_data->type = PKCS11;
+		new_token->lock = int_lock_p11;
+		new_token->unlock = int_unlock_p11;
+		new_token->is_locked = int_is_locked_p11;
+		new_token->is_locked_till_reboot = int_is_locked_till_reboot_p11;
+		new_token->wrap_key = int_wrap_key_p11;
+		new_token->unwrap_key = int_unwrap_key_p11;
+		new_token->change_passphrase = int_change_passphrase_p11;
+		new_token->reset_auth = int_reset_auth_p11;
+		new_token->get_atr = int_get_atr_p11;
+		new_token->send_apdu = int_send_apdu_p11;
+		break;
+	}
+#endif // ENABLEPKCS11
 	default:
 		ERROR("Unrecognized token type");
 		goto err;
@@ -654,6 +772,12 @@ token_free(scd_token_t *token)
 			usbtoken_free(token->token_data->int_token.usbtoken);
 			break;
 #endif // ENABLESCHSM
+#ifdef ENABLEPKCS11
+		case (PKCS11):
+			TRACE("Removing p11token %s", uuid_string(token->token_data->token_uuid));
+			p11token_free(token->token_data->int_token.p11token);
+			break;
+#endif // ENABLEPKCS11
 		default:
 			ERROR("Failed to determine token type. Cannot clean up");
 			return;

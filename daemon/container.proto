@@ -69,6 +69,7 @@ enum ContainerTokenType {
 	NONE = 1;
 	SOFT = 2;
 	USB = 3;
+	PKCS11 = 4;
 }
 
 message ContainerConfig {
@@ -136,6 +137,10 @@ message ContainerConfig {
 
 	// enable module to support legacy xorg server
 	optional bool enable_xorg_compat = 32 [ default = false ];
+
+	// Specify PKCS#11 module the container should use
+	// if the token_type is PKCS11
+	optional string pkcs11_module = 32;
 }
 
 /**

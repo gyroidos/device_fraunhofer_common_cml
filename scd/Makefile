@@ -28,6 +28,7 @@ SANITIZERS ?= n
 WCAST_ALIGN ?= y
 TRUSTME_SCHSM ?= n
 SYSTEMD ?= n
+TRUSTME_PKCS11 ?= y
 
 LOCAL_CFLAGS := -std=gnu99 -I.. -I../include -I../tpm2d -Icommon -pedantic -O2
 LOCAL_CFLAGS += -DTPM_POSIX
@@ -78,6 +79,14 @@ ifeq ($(SYSTEMD),y)
 	LOCAL_CFLAGS += \
 		-DSYSTEMD \
 		-DSCD_CONTROL_SOCKET=NULL
+endif
+ifeq ($(TRUSTME_PKCS11), y)
+    # If requested, we build sc-hsm support into trustme
+    LOCAL_CFLAGS += -DENABLEPKCS11 -I../pkcs11-lib 
+	LOCAL_LDFLAGS += -ldl
+    SRC_FILES += \
+	p11token.c \
+	pkcs11-lib/libpkcs11.c
 endif
 
 
