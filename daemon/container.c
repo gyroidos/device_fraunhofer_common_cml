@@ -314,6 +314,15 @@ container_unregister_observer(container_t *container, container_callback_t *cont
 }
 
 void
+container_finish_observers(container_t *container, void (*cb)(void *), void *data)
+{
+	ASSERT(container);
+	ASSERT(cb);
+
+	compartment_finish_observers(container->compartment, cb, data);
+}
+
+void
 container_init_env_prepend(container_t *container, char **init_env, size_t init_env_len)
 {
 	ASSERT(container);
