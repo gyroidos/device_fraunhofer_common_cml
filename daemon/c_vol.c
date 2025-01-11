@@ -296,7 +296,7 @@ c_vol_create_image_copy(c_vol_t *vol, const char *img, const mount_entry_t *mnte
 	src = mem_printf("%s/%s.img", dir, mount_entry_get_img(mntent));
 
 	DEBUG("Copying file %s to %s", src, img);
-	ret = file_copy(src, img, -1, 512, 0);
+	ret = file_copy_zero(src, img, -1, 0);
 	if (ret < 0)
 		ERROR("Could not copy file %s to %s", src, img);
 
@@ -632,7 +632,7 @@ c_vol_setup_busybox_copy(const char *target_base)
 	if ((ret = dir_mkdir_p(target_dir_p, 0755)) < 0) {
 		WARN_ERRNO("Could not mkdir '%s' dir", target_dir_p);
 	} else if (file_exists("/bin/busybox")) {
-		file_copy("/bin/busybox", target_bin, -1, 512, 0);
+		file_copy_zero("/bin/busybox", target_bin, -1, 0);
 		INFO("Copied %s to container", target_bin);
 		if (chmod(target_bin, 0755)) {
 			WARN_ERRNO("Could not set %s executable", target_bin);
@@ -1844,10 +1844,10 @@ c_vol_start_child(void *volp)
 	if (dir_mkdir_p(cservice_dir_p, 0755) < 0) {
 		WARN_ERRNO("Could not mkdir '%s' dir", cservice_dir_p);
 	} else if (file_exists("/sbin/cml-service-container-static")) {
-		file_copy("/sbin/cml-service-container-static", cservice_bin, -1, 512, 0);
+		file_copy_zero("/sbin/cml-service-container-static", cservice_bin, -1, 0);
 		INFO("Copied %s to container", cservice_bin);
 	} else if (file_exists("/usr/sbin/cml-service-container-static")) {
-		file_copy("/usr/sbin/cml-service-container-static", cservice_bin, -1, 512, 0);
+		file_copy_zero("/usr/sbin/cml-service-container-static", cservice_bin, -1, 0);
 		INFO("Copied %s to container", cservice_bin);
 	} else {
 		WARN_ERRNO("Could not copy %s to container", cservice_bin);

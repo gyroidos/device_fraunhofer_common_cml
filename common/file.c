@@ -188,6 +188,45 @@ out:
 }
 
 int
+file_copy_zero(const char *in_file, const char *out_file, size_t len, off_t seek)
+{
+	int in_fd, out_fd, ret = 0;
+
+	IF_NULL_RETVAL(in_file, -1);
+	IF_NULL_RETVAL(out_file, -1);
+
+	in_fd = open(in_file, O_RDONLY);
+	if (in_fd < 0) {
+		DEBUG_ERRNO("Could not open input file %s", in_file);
+		return -1;
+	}
+
+	out_fd = open(out_file, O_WRONLY | O_CREAT | O_TRUNC, 00666);
+	if (out_fd < 0) {
+		DEBUG_ERRNO("Could not open output file %s", out_file);
+		close(in_fd);
+		return -1;
+	}
+
+	while (len != 0) {
+		ret = copy_file_range(in_fd, &seek, out_fd, NULL, len, 0);
+		if (ret < 0) {
+			DEBUG_ERRNO("copy_file_range failed");
+			goto out;
+		} else if (ret == 0) {
+			len = ret;
+		} else {
+			len -= ret;
+		}
+	}
+out:
+	close(out_fd);
+	close(in_fd);
+
+	return ret;
+}
+
+int
 file_move(const char *src, const char *dst, size_t bs)
 {
 	if (rename(src, dst) == 0)

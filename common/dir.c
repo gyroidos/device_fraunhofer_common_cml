@@ -259,7 +259,7 @@ dir_copy_folder_contents_cb(const char *path, const char *name, void *data)
 		break;
 	case S_IFREG:
 		TRACE("Copying reg file %s -> %s", file_src, file_dst);
-		if (file_copy(file_src, file_dst, -1, 512, 0)) {
+		if (file_copy_zero(file_src, file_dst, -1, 0)) {
 			ERROR("Could not copy file %s -> %s", file_src, file_dst);
 			ret--;
 		} else if (chown(file_dst, s.st_uid, s.st_gid) < 0) {
