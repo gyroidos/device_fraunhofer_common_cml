@@ -22,6 +22,7 @@
  */
 
 #define _GNU_SOURCE
+#include <linux/sched.h>
 #include <sched.h>
 
 #include "compartment.h"
@@ -47,31 +48,11 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/syscall.h>
 #include <signal.h>
 #include <sys/wait.h>
 #include <pty.h>
 #include <sys/mman.h>
-
-#define CLONE_STACK_SIZE 8 * 1024 * 1024
-/* Define some missing clone flags in BIONIC */
-#ifndef CLONE_NEWNS
-#define CLONE_NEWNS 0x00020000
-#endif
-#ifndef CLONE_NEWUTS
-#define CLONE_NEWUTS 0x04000000
-#endif
-#ifndef CLONE_NEWIPC
-#define CLONE_NEWIPC 0x08000000
-#endif
-#ifndef CLONE_NEWUSER
-#define CLONE_NEWUSER 0x10000000
-#endif
-#ifndef CLONE_NEWPID
-#define CLONE_NEWPID 0x20000000
-#endif
-#ifndef CLONE_NEWNET
-#define CLONE_NEWNET 0x40000000
-#endif
 
 extern logf_handler_t *cml_daemon_logfile_handler;
 
@@ -159,6 +140,12 @@ enum compartment_start_sync_msg {
 };
 
 static list_t *compartment_module_list = NULL;
+
+static int
+clone3(struct clone_args *cl_args, size_t size)
+{
+	return syscall(SYS_clone3, cl_args, size);
+}
 
 bool
 compartment_is_stoppable(compartment_t *compartment)
@@ -841,13 +828,12 @@ compartment_close_all_fds()
 }
 
 static int
-compartment_start_child(void *data)
+compartment_start_child(compartment_t *compartment)
 {
-	ASSERT(data);
+	ASSERT(compartment);
 
 	int ret = 0;
 
-	compartment_t *compartment = data;
 	char *kvm_root = mem_printf("/tmp/%s", uuid_string(compartment->uuid));
 
 	/*******************************************************************/
@@ -1026,13 +1012,11 @@ error:
 }
 
 static int
-compartment_start_child_early(void *data)
+compartment_start_child_early(compartment_t *compartment)
 {
-	ASSERT(data);
+	ASSERT(compartment);
 
 	int ret = 0;
-
-	compartment_t *compartment = data;
 
 	event_reset();
 	close(compartment->sync_sock_parent);
@@ -1054,23 +1038,14 @@ compartment_start_child_early(void *data)
 		}
 	}
 
-	void *compartment_stack = NULL;
-	/* Allocate node stack */
+	struct clone_args args = { 0 };
+	args.exit_signal = SIGCHLD;
 
-	if (MAP_FAILED ==
-	    (compartment_stack = mmap(NULL, CLONE_STACK_SIZE, PROT_READ | PROT_WRITE,
-				      MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0))) {
-		WARN_ERRNO("Not enough memory for allocating compartment stack");
-		goto error;
-	}
-	void *compartment_stack_high = (void *)((const char *)compartment_stack + CLONE_STACK_SIZE);
 	/* Set namespaces for node */
 	/* set some basic and non-configurable namespaces */
-	unsigned long clone_flags = 0;
-	clone_flags |= SIGCHLD | CLONE_PARENT; // sig child to main process
-	clone_flags |= CLONE_NEWUTS | CLONE_NEWNS | CLONE_NEWPID;
+	args.flags |= CLONE_NEWUTS | CLONE_NEWNS | CLONE_NEWPID;
 	if (compartment_has_ipcns(compartment))
-		clone_flags |= CLONE_NEWIPC;
+		args.flags |= CLONE_NEWIPC;
 
 	compartment_module_instance_t *c_user =
 		compartment_module_get_mod_instance_by_name(compartment, "c_user");
@@ -1087,14 +1062,16 @@ compartment_start_child_early(void *data)
 		}
 	} else {
 		if (c_user && compartment_has_userns(compartment))
-			clone_flags |= CLONE_NEWUSER;
+			args.flags |= CLONE_NEWUSER;
 		if (c_net && compartment_has_netns(compartment))
-			clone_flags |= CLONE_NEWNET;
+			args.flags |= CLONE_NEWNET;
 	}
 
-	compartment->pid =
-		clone(compartment_start_child, compartment_stack_high, clone_flags, compartment);
-	if (compartment->pid < 0) {
+	compartment->pid = clone3(&args, sizeof(struct clone_args));
+	if (compartment->pid == 0) { // child
+		int ret = compartment_start_child(compartment);
+		_exit(ret);
+	} else if (compartment->pid < 0) {
 		ERROR_ERRNO("Double clone compartment failed");
 		goto error;
 	}
@@ -1378,7 +1355,6 @@ compartment_start(compartment_t *compartment)
 	ASSERT(compartment);
 
 	int ret = 0;
-	void *compartment_stack = NULL;
 
 	compartment_set_state(compartment, COMPARTMENT_STATE_STARTING);
 
@@ -1399,17 +1375,8 @@ compartment_start(compartment_t *compartment)
 	/*********************************************************/
 	/* PREPARE CLONE */
 
-	/* Allocate node stack */
-	if (MAP_FAILED ==
-	    (compartment_stack = mmap(NULL, CLONE_STACK_SIZE, PROT_READ | PROT_WRITE,
-				      MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0))) {
-		WARN_ERRNO("Not enough memory for allocating compartment stack");
-		goto error_pre_clone;
-	}
-	void *compartment_stack_high = (void *)((const char *)compartment_stack + CLONE_STACK_SIZE);
-
-	unsigned long clone_flags = 0;
-	clone_flags |= SIGCHLD;
+	struct clone_args args = { 0 };
+	args.exit_signal = SIGCHLD;
 
 	/* Create a socketpair for synchronization and save it in the compartment structure to be able to
 	 * pass it around */
@@ -1430,10 +1397,11 @@ compartment_start(compartment_t *compartment)
 		INFO("Container in setup mode!");
 	}
 
-	/* TODO find out if stack is only necessary with CLONE_VM */
-	pid_t compartment_pid = clone(compartment_start_child_early, compartment_stack_high,
-				      clone_flags, compartment);
-	if (compartment_pid < 0) {
+	pid_t compartment_pid = clone3(&args, sizeof(struct clone_args));
+	if (compartment_pid == 0) { // child
+		int ret = compartment_start_child_early(compartment);
+		_exit(ret);
+	} else if (compartment_pid < 0) {
 		WARN_ERRNO("Clone compartment failed");
 		goto error_pre_clone;
 	}
@@ -1463,16 +1431,12 @@ compartment_start(compartment_t *compartment)
 			goto error_post_clone;
 		}
 	}
-	if (compartment_stack && munmap(compartment_stack, CLONE_STACK_SIZE) == -1)
-		WARN("Could not unmap compartment_stack!");
 
 	return 0;
 
 error_pre_clone:
 	compartment_cleanup(compartment, false);
 	compartment_set_state(compartment, COMPARTMENT_STATE_STOPPED);
-	if (compartment_stack && munmap(compartment_stack, CLONE_STACK_SIZE) == -1)
-		WARN("Could not unmap compartment_stack!");
 	return ret;
 
 error_post_clone:
@@ -1483,8 +1447,6 @@ error_post_clone:
 		WARN_ERRNO("write to sync socket failed");
 		compartment_kill(compartment);
 	}
-	if (compartment_stack && munmap(compartment_stack, CLONE_STACK_SIZE) == -1)
-		WARN("Could not unmap compartment_stack!");
 	return ret;
 }
 
