@@ -40,6 +40,7 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/sysmacros.h>
 #include <unistd.h>
 #include <errno.h>
 #include <inttypes.h>
@@ -548,10 +549,22 @@ int
 guestos_mgr_push_config(unsigned char *cfg, size_t cfglen, unsigned char *sig, size_t siglen,
 			unsigned char *cert, size_t certlen, int resp_fd)
 {
-	INFO("Push GuestOS config (Phase 1)");
-
 	int res = -1;
 	int *cb_resp_fd = mem_new0(int, 1);
+
+	INFO("Push GuestOS config (Phase 1)");
+
+	// perform basic check whether /boot partition has been mounted
+	struct stat s_root;
+	struct stat s_boot;
+	IF_TRUE_RETVAL_ERROR_ERRNO(stat("/", &s_root), -1);
+	IF_TRUE_RETVAL_ERROR_ERRNO(stat("/boot", &s_boot), -1);
+
+	if (major(s_root.st_dev) == major(s_boot.st_dev) && minor(s_root.st_dev) == minor(s_boot.st_dev)) {
+		ERROR("'/' and '/boot' on same device, mount partition does not seem to be mounted");
+		goto out;
+	}
+
 	*cb_resp_fd = resp_fd;
 
 	if (!cfg) {
@@ -568,6 +581,8 @@ guestos_mgr_push_config(unsigned char *cfg, size_t cfglen, unsigned char *sig, s
 					GUESTOS_MGR_VERIFY_HASH_ALGO, push_config_verify_buf_cb,
 					cb_resp_fd);
 	}
+
+out:
 	if (res < 0) {
 		if (control_send_message(CONTROL_RESPONSE_GUESTOS_MGR_INSTALL_FAILED, resp_fd) < 0)
 			WARN("Could not send response to fd=%d", resp_fd);
