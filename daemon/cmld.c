@@ -620,8 +620,6 @@ cmld_reload_container(const uuid_t *uuid, const char *path)
 
 		cmld_containers_list = list_remove(cmld_containers_list, c_current);
 		container_free(c_current);
-		// container_free() releases the token in scd, thus reattach it
-		container_token_attach(c);
 	}
 
 	DEBUG("Loaded config for container %s", container_get_name(c));
