@@ -400,6 +400,12 @@ void
 compartment_unregister_observer(compartment_t *compartment, compartment_callback_t *cb);
 
 /**
+ * Set observer finishiner callback.
+ */
+void
+compartment_finish_observers(compartment_t *compartment, void (*cb)(void *), void *data);
+
+/**
  * Gets the compartment's key previously set by compartment_set_key or NULL if no key
  * has been set.
  */

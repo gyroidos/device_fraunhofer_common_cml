@@ -1106,13 +1106,6 @@ c_smartcard_free(void *smartcardp)
 	c_smartcard_t *smartcard = smartcardp;
 	IF_NULL_RETURN(smartcard);
 
-	if (smartcard->token_type == CONTAINER_TOKEN_TYPE_USB) {
-		if (c_smartcard_scd_token_remove_block(smartcard)) {
-			WARN("Cannot remove USB token for container %s",
-			     container_get_name(smartcard->container));
-		}
-	}
-
 	/* release scd connection */
 	close(smartcard->sock);
 

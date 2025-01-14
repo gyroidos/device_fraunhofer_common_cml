@@ -105,6 +105,10 @@ struct compartment {
 	char *debug_log_dir; /* log for output of compartment child */
 
 	list_t *observer_list; /* list of function callbacks to be called when the state changes */
+	void (*observer_finish_cb)(
+		void *); /* finisher called after all observers run during state change */
+	void *observer_finish_cb_data; /* data pointer as paramenter for finisher callback */
+
 	event_timer_t *stop_timer;  /* timer to handle compartment stop timeout */
 	event_timer_t *start_timer; /* timer to handle a compartment start timeout */
 
@@ -697,8 +701,8 @@ compartment_sigchld_handle_helpers(compartment_t *compartment, event_signal_t *s
 		compartment_state_t state = compartment->is_rebooting ?
 						    COMPARTMENT_STATE_REBOOTING :
 						    COMPARTMENT_STATE_STOPPED;
-		compartment_set_state(compartment, state);
 		compartment->is_rebooting = false;
+		compartment_set_state(compartment, state);
 	}
 }
 
@@ -803,6 +807,7 @@ compartment_sigchld_early_cb(UNUSED int signum, event_signal_t *sig, void *data)
 		/* remove the sigchld callback for this early child from the event loop */
 		event_remove_signal(sig);
 		event_signal_free(sig);
+		compartment->pid_early = -1;
 		// cleanup if early child returned with an error
 		if ((WIFEXITED(status) && WEXITSTATUS(status)) || WIFSIGNALED(status)) {
 			if (compartment->pid == -1)
@@ -810,7 +815,6 @@ compartment_sigchld_early_cb(UNUSED int signum, event_signal_t *sig, void *data)
 
 			compartment_set_state(compartment, COMPARTMENT_STATE_STOPPED);
 		}
-		compartment->pid_early = -1;
 	}
 
 	// reap any open helper child and set state accordingly
@@ -1682,6 +1686,11 @@ compartment_notify_observers(compartment_t *compartment)
 			l = l->next;
 		}
 	}
+
+	if (compartment->observer_finish_cb) {
+		DEBUG("all observers handled, observer_finish_cb is set, execute it!");
+		compartment->observer_finish_cb(compartment->observer_finish_cb_data);
+	}
 }
 
 void
@@ -1761,6 +1770,15 @@ compartment_unregister_observer(compartment_t *compartment, compartment_callback
 		      list_length(compartment->observer_list));
 		mem_free0(cb);
 	}
+}
+
+void
+compartment_finish_observers(compartment_t *compartment, void (*cb)(void *), void *data)
+{
+	ASSERT(compartment);
+
+	compartment->observer_finish_cb = cb;
+	compartment->observer_finish_cb_data = data;
 }
 
 const char *

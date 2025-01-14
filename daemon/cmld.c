@@ -586,6 +586,15 @@ cmld_container_config_sync_cb(container_t *container, container_callback_t *cb, 
 	mem_free0(c_uuid);
 }
 
+static void
+cmld_container_reload_delayed_free(void *data)
+{
+	ASSERT(data);
+
+	container_t *container = data;
+	container_free(container);
+}
+
 container_t *
 cmld_reload_container(const uuid_t *uuid, const char *path)
 {
@@ -619,9 +628,9 @@ cmld_reload_container(const uuid_t *uuid, const char *path)
 		      container_get_name(c_current));
 
 		cmld_containers_list = list_remove(cmld_containers_list, c_current);
-		container_free(c_current);
-		// container_free() releases the token in scd, thus reattach it
-		container_token_attach(c);
+		// delayed free to allow all observers to finish up
+		container_finish_observers(c_current, cmld_container_reload_delayed_free,
+					   c_current);
 	}
 
 	DEBUG("Loaded config for container %s", container_get_name(c));
